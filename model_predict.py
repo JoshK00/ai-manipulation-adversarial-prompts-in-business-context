@@ -1,51 +1,83 @@
-"""Run predictions over a JSON dataset using the defense classifier.
-
-This script loads a dataset of prompts and runs a text-classification
-pipeline to detect potential prompt manipulations. Results are printed to
-stdout with label and confidence score.
-"""
-
 from transformers import pipeline
 from datasets import load_dataset
+import numpy as np
+from sklearn.metrics import classification_report, confusion_matrix
+from scipy.special import softmax
+import matplotlib.pyplot as plt
+import seaborn as sns
 
+# -----------------------------
+# 1. Pipeline laden
+# -----------------------------
 classifier = pipeline(
     "text-classification",
-    model="defense_classifier_final_V3_en",
-    tokenizer="defense_classifier_final_V3_en",
-    device=0,
+    model="defense_classifier_final",
+    tokenizer="defense_classifier_final",
+    device=0
 )
-# Initialize classifier pipeline (loads model and tokenizer)
 
+# -----------------------------
+# 2. Validation Dataset laden
+# -----------------------------
+predict_dataset = load_dataset("json", data_files="data/adversarial-prompts_business_validate.json")["train"]
 
-def predict_from_dataset(data_file: str = "data/small_set.json") -> None:
-    """Load prompts from a JSON dataset and print classification results.
+prompts = predict_dataset["prompt"]
+true_labels = predict_dataset["label"]  # 0 = benign, 1 = adversarial
 
-    Parameters
-    ----------
-    data_file : str
-        Path to a JSON file containing a dataset with a `prompt` field.
-    """
-    # Load prompts from the JSON file into a dataset
-    predict_dataset = load_dataset("json", data_files=data_file)["train"]
+# Threshold einstellen
+THRESHOLD = 0.35
 
-    # Iterate over prompts, run classifier, and print human-readable results
-    for prompt in predict_dataset["prompt"]:
-        result = classifier(prompt)[0]
+preds = []
 
-        label = result["label"]
-        score = result["score"]
+# -----------------------------
+# 3. Vorhersagen erstellen mit Threshold
+# -----------------------------
+for prompt in prompts:
+    result = classifier(prompt)[0]
+    
+    label = result["label"]       # "LABEL_0" oder "LABEL_1"
+    score = result["score"]       # Wahrscheinlichkeit für die vorhergesagte Klasse
+    
+    # Pipeline gibt logit-basiert label, wir wandeln in Wahrscheinlichkeit um
+    # softmax nicht nötig, score ist schon Wahrscheinlichkeit des vorhergesagten Labels
+    
+    if label == "LABEL_1":  # adversarial
+        prob_adversarial = score
+    else:  # LABEL_0 -> benign
+        prob_adversarial = 1 - score
 
-        if label == "LABEL_0":
-            verdict = "No manipulation detected."
-        else:
-            verdict = "Manipulation detected!"
+    # Threshold anwenden
+    pred_label = 1 if prob_adversarial >= THRESHOLD else 0
+    preds.append(pred_label)
 
-        print(
-            f"Prediction: {verdict} | "
-            f"label={label} | score={score:.4f}\n"
-            f"Prompt: {prompt}\n"
-        )
+    # Optional: Ausgabe pro Prompt
+    verdict = "Manipulation detected!" if pred_label == 1 else "No manipulation detected."
+    print(
+        f"Prediction: {verdict} | "
+        f"score={prob_adversarial:.4f}\n"
+        f"Prompt: {prompt}\n"
+    )
 
+# -----------------------------
+# 4. Classification Report
+# -----------------------------
+print("\n=== Classification Report on Validation Set ===")
+report = classification_report(true_labels, preds, target_names=["benign", "adversarial"])
+print(report)
 
-if __name__ == "__main__":
-    predict_from_dataset()
+# -----------------------------
+# 5. Confusion Matrix
+# -----------------------------
+cm = confusion_matrix(true_labels, preds)
+print("Confusion Matrix (TN, FP, FN, TP):")
+print(cm)
+
+# Plot Confusion Matrix
+plt.figure(figsize=(6,5))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+            xticklabels=["benign", "adversarial"],
+            yticklabels=["benign", "adversarial"])
+plt.xlabel("Predicted")
+plt.ylabel("True")
+plt.title(f"Validation Set Confusion Matrix (Threshold={THRESHOLD})")
+plt.show()
