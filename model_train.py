@@ -2,9 +2,9 @@
 Training script for the defense classifier with threshold-based evaluation
 and confusion matrix plotting.
 
-Loads a dataset of prompts, tokenizes the text, trains a sequence-classification model
-using Hugging Face Trainer API, outputs a classification report on the test set,
-and plots the confusion matrix to visualize false positives and false negatives.
+Loads a dataset of prompts, tokenizes the text, trains a sequence classification model
+using the Hugging Face Trainer API, outputs a classification report on the test set,
+and plots a confusion matrix to visualize false positives and false negatives.
 """
 
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
@@ -12,22 +12,27 @@ from transformers import Trainer, TrainingArguments
 from datasets import load_dataset
 import torch
 import numpy as np
-from sklearn.metrics import classification_report, accuracy_score, precision_recall_fscore_support, confusion_matrix
+from sklearn.metrics import (
+    classification_report,
+    accuracy_score,
+    precision_recall_fscore_support,
+    confusion_matrix,
+)
 from scipy.special import softmax
 import matplotlib.pyplot as plt
 import seaborn as sns
-import pre_processing as prepro  # falls du zusätzliche Preprocessing-Funktionen hast
+import pre_processing as prepro  # if you have additional preprocessing utilities
 
 
 # -----------------------------
-# 1. Model & Tokenizer
+# 1. Model & tokenizer
 # -----------------------------
 model_name = "roberta-large"
 
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForSequenceClassification.from_pretrained(
     model_name,
-    num_labels=2
+    num_labels=2,
 )
 
 
@@ -57,7 +62,7 @@ dataset = dataset.train_test_split(test_size=0.2)
 dataset = dataset.map(
     tokenize,
     batched=True,
-    remove_columns=["prompt", "category"]  # entferne Text und Kategorie
+    remove_columns=["prompt", "category"],  # remove raw text and category metadata
 )
 
 # Set format for PyTorch
@@ -67,20 +72,21 @@ dataset.set_format("torch")
 # -----------------------------
 # 4. Threshold-based compute_metrics
 # -----------------------------
-THRESHOLD = 0.35  # <-- hier kannst du den Threshold anpassen
+THRESHOLD = 0.35  # adjust this threshold as needed
+
 
 def compute_metrics_with_threshold(p, threshold=THRESHOLD):
     """Compute metrics using a custom threshold for class 1."""
     probs = softmax(p.predictions, axis=1)
     preds = (probs[:, 1] >= threshold).astype(int)  # 1 = adversarial
     labels = p.label_ids
-    precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='binary')
+    precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average="binary")
     acc = accuracy_score(labels, preds)
     return {
         "accuracy": acc,
         "f1": f1,
         "precision": precision,
-        "recall": recall
+        "recall": recall,
     }
 
 
@@ -90,10 +96,10 @@ def compute_metrics_with_threshold(p, threshold=THRESHOLD):
 args = TrainingArguments(
     output_dir="./defense_classifier",
     per_device_train_batch_size=16,
-    gradient_accumulation_steps=2,     # effektive Batch = 32
+    gradient_accumulation_steps=2,  # effective batch size = 32
     learning_rate=2e-5,
     num_train_epochs=8,
-    eval_strategy="epoch",             # evaluiere am Ende jeder Epoche
+    eval_strategy="epoch",  # run evaluation at the end of each epoch
     save_strategy="epoch",
     logging_strategy="steps",
     logging_steps=20,
@@ -112,7 +118,7 @@ trainer = Trainer(
     args=args,
     train_dataset=dataset["train"],
     eval_dataset=dataset["test"],
-    compute_metrics=lambda p: compute_metrics_with_threshold(p, threshold=THRESHOLD)
+    compute_metrics=lambda p: compute_metrics_with_threshold(p, threshold=THRESHOLD),
 )
 
 
@@ -143,17 +149,22 @@ print(report)
 
 
 # -----------------------------
-# 9. Confusion Matrix
+# 9. Confusion matrix
 # -----------------------------
 cm = confusion_matrix(labels, preds_thresh)
 print("Confusion Matrix (TN, FP, FN, TP):")
 print(cm)
 
 # Plot confusion matrix
-plt.figure(figsize=(6,5))
-sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-            xticklabels=["benign", "adversarial"],
-            yticklabels=["benign", "adversarial"])
+plt.figure(figsize=(6, 5))
+sns.heatmap(
+    cm,
+    annot=True,
+    fmt="d",
+    cmap="Blues",
+    xticklabels=["benign", "adversarial"],
+    yticklabels=["benign", "adversarial"],
+)
 plt.xlabel("Predicted")
 plt.ylabel("True")
 plt.title(f"Confusion Matrix (Threshold={THRESHOLD})")
